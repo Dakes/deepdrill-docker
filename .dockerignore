@@ -1,0 +1,14 @@
+# host scripts and junk
+.bin/
+.env
+.git
+.github
+.vscode
+.idea
+.directory
+
+
+# local artifacts
+project/
+out/
+*.log

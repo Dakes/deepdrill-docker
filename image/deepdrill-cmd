@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+
+usage() {
+cat <<EOF
+Usage: deepdrill-cmd -c <config.ini> [-o outdir] [-j jobs] [--target make_target] [--no-yes]
+
+
+Runs DeepDrill non-interactively inside the container.
+-c, --config Path to .ini (relative to /work)
+-o, --out Output dir (default: /work/out)
+-j, --jobs Parallel jobs for 'make' (default: nproc)
+--target Optional make target after render (e.g. deepzoom.mov)
+--no-yes Do not auto-confirm deepmake file creation
+
+
+Environment:
+DEEPDRILL_ASSUME_YES=1 # auto-confirm deepmake (default)
+EOF
+}
+
+
+CONF=""; OUT="/work/out"; JOBS="$(nproc)"; TARGET=""; ASSUME_YES=1
+
+
+while [[ $# -gt 0 ]]; do
+case "$1" in
+-c|--config) CONF="$2"; shift 2;;
+-o|--out) OUT="$2"; shift 2;;
+-j|--jobs) JOBS="$2"; shift 2;;
+--target) TARGET="$2"; shift 2;;
+--no-yes) ASSUME_YES=0; shift;;
+-h|--help) usage; exit 0;;
+*) echo "Unknown arg: $1"; usage; exit 1;;
+esac
+done
+
+
+[[ -n "$CONF" ]] || { echo "Missing --config"; usage; exit 1; }
+
+
+mkdir -p "$OUT"
+
+
+if [[ ${DEEPDRILL_ASSUME_YES:-$ASSUME_YES} -eq 1 ]]; then
+yes | /opt/DeepDrill/build/deepmake "$CONF" -o "$OUT"
+else
+/opt/DeepDrill/build/deepmake "$CONF" -o "$OUT"
+fi
+
+
+cd "$OUT"
+make -j"$JOBS"
+
+
+if [[ -n "$TARGET" ]]; then
+make "$TARGET"
+fi
