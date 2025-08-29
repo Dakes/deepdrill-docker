@@ -5,3 +5,7 @@ out/
 project/
 .directory
 *repomix*
+
+*.ini
+!smoke.ini
+AGENTS.md

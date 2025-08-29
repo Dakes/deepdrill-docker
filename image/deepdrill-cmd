@@ -43,10 +43,12 @@ done
 mkdir -p "$OUT"
 
 
+# Run deepmake non-interactively; always auto-confirm
 if [[ ${DEEPDRILL_ASSUME_YES:-$ASSUME_YES} -eq 1 ]]; then
-yes | /opt/DeepDrill/build/deepmake "$CONF" -o "$OUT"
+  # Send a single 'y' to confirm; avoids SIGPIPE with 'yes' under pipefail
+  printf 'y\n' | /opt/DeepDrill/build/deepmake "$CONF" -o "$OUT"
 else
-/opt/DeepDrill/build/deepmake "$CONF" -o "$OUT"
+  /opt/DeepDrill/build/deepmake "$CONF" -o "$OUT"
 fi
 
 
@@ -54,6 +56,63 @@ cd "$OUT"
 make -j"$JOBS"
 
 
-if [[ -n "$TARGET" ]]; then
-make "$TARGET"
-fi
+auto_build_media() {
+  local mk="Makefile"
+  [[ -f $mk ]] || return 0
+
+  # Gather video and image targets declared in Makefile
+  mapfile -t video_targets < <(awk -F: '/^[A-Za-z0-9_\.\/\-]+:/{print $1}' "$mk" | \
+    grep -Ei '\\.(mp4|mov|webm|mkv|avi|mpg|m4v)$' || true)
+  mapfile -t image_targets < <(awk -F: '/^[A-Za-z0-9_\.\/\-]+:/{print $1}' "$mk" | \
+    grep -Ei '\\.(jpg|jpeg|png)$' || true)
+
+  # Fallback named targets commonly used by DeepDrill projects
+  local named_fallbacks=(video render final deepzoom.mov)
+
+  # Helper to check if a make target exists (silent)
+  has_target() { make -n "$1" >/dev/null 2>&1; }
+
+  # If the user mistakenly passed an .ini as target, ignore it and auto-build
+  if [[ -n "${TARGET:-}" && "$TARGET" =~ \.ini$ ]]; then
+    echo "Note: ignoring --target '$TARGET' (looks like a .ini). Auto-building media outputs..."
+    TARGET=""
+  fi
+
+  # If a valid non-ini target was provided, try it and return
+  if [[ -n "${TARGET:-}" ]]; then
+    if has_target "$TARGET"; then
+      echo "Building requested target: $TARGET"
+      make -j"$JOBS" "$TARGET"
+      return 0
+    else
+      echo "Requested target '$TARGET' not found in Makefile. Auto-building media outputs..."
+    fi
+  fi
+
+  # Prefer explicit video targets from the Makefile
+  local built_any=0
+  if [[ ${#video_targets[@]} -gt 0 ]]; then
+    echo "Building video targets: ${video_targets[*]}"
+    make -j"$JOBS" "${video_targets[@]}" && built_any=1
+  fi
+
+  # Build common named fallbacks if present
+  for t in "${named_fallbacks[@]}"; do
+    if has_target "$t"; then
+      echo "Building fallback target: $t"
+      make -j"$JOBS" "$t" && built_any=1
+    fi
+  done
+
+  # Also produce a representative still image if defined
+  if [[ ${#image_targets[@]} -gt 0 ]]; then
+    echo "Building image targets: ${image_targets[*]}"
+    make -j"$JOBS" "${image_targets[@]}" && built_any=1
+  fi
+
+  if [[ "$built_any" -eq 0 ]]; then
+    echo "No media targets detected. Default 'make' outputs already built."
+  fi
+}
+
+auto_build_media
