@@ -1,47 +1,44 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-
 usage() {
-cat <<EOF
+  cat <<EOF
 Usage: deepdrill-cmd -c <config.ini> [-o outdir] [-j jobs] [--target make_target] [--no-yes]
 
-
 Runs DeepDrill non-interactively inside the container.
--c, --config Path to .ini (relative to /work)
--o, --out Output dir (default: /work/out)
--j, --jobs Parallel jobs for 'make' (default: nproc)
---target Optional make target after render (e.g. deepzoom.mov)
---no-yes Do not auto-confirm deepmake file creation
-
+  -c, --config   Path to .ini (relative to /work)
+  -o, --out      Output dir (default: /work/out)
+  -j, --jobs     Parallel jobs for 'make' (default: nproc)
+  --target       Optional make target to build (skips full build if specified)
+  --no-yes       Do not auto-confirm deepmake file creation
 
 Environment:
-DEEPDRILL_ASSUME_YES=1 # auto-confirm deepmake (default)
+  DEEPDRILL_ASSUME_YES=1  # auto-confirm deepmake (default)
 EOF
 }
 
-
 CONF=""; OUT="/work/out"; JOBS="$(nproc)"; TARGET=""; ASSUME_YES=1
 
-
 while [[ $# -gt 0 ]]; do
-case "$1" in
--c|--config) CONF="$2"; shift 2;;
--o|--out) OUT="$2"; shift 2;;
--j|--jobs) JOBS="$2"; shift 2;;
---target) TARGET="$2"; shift 2;;
---no-yes) ASSUME_YES=0; shift;;
--h|--help) usage; exit 0;;
-*) echo "Unknown arg: $1"; usage; exit 1;;
-esac
+  case "$1" in
+    -c|--config) CONF="$2"; shift 2;;
+    -o|--out) OUT="$2"; shift 2;;
+    -j|--jobs) JOBS="$2"; shift 2;;
+    --target) TARGET="$2"; shift 2;;
+    --no-yes) ASSUME_YES=0; shift;;
+    -h|--help) usage; exit 0;;
+    *) echo "Unknown arg: $1"; usage; exit 1;;
+  esac
 done
-
 
 [[ -n "$CONF" ]] || { echo "Missing --config"; usage; exit 1; }
 
+# Handle relative vs absolute paths for output
+if [[ "$OUT" != /* ]]; then
+  OUT="/work/$OUT"
+fi
 
 mkdir -p "$OUT"
-
 
 # Run deepmake non-interactively; always auto-confirm
 if [[ ${DEEPDRILL_ASSUME_YES:-$ASSUME_YES} -eq 1 ]]; then
@@ -51,68 +48,100 @@ else
   /opt/DeepDrill/build/deepmake "$CONF" -o "$OUT"
 fi
 
-
 cd "$OUT"
-make -j"$JOBS"
 
+# Helper to check if a make target exists
+has_target() { make -n "$1" >/dev/null 2>&1; }
 
-auto_build_media() {
-  local mk="Makefile"
-  [[ -f $mk ]] || return 0
-
-  # Gather video and image targets declared in Makefile
-  mapfile -t video_targets < <(awk -F: '/^[A-Za-z0-9_\.\/\-]+:/{print $1}' "$mk" | \
-    grep -Ei '\\.(mp4|mov|webm|mkv|avi|mpg|m4v)$' || true)
-  mapfile -t image_targets < <(awk -F: '/^[A-Za-z0-9_\.\/\-]+:/{print $1}' "$mk" | \
-    grep -Ei '\\.(jpg|jpeg|png)$' || true)
-
-  # Fallback named targets commonly used by DeepDrill projects
-  local named_fallbacks=(video render final deepzoom.mov)
-
-  # Helper to check if a make target exists (silent)
-  has_target() { make -n "$1" >/dev/null 2>&1; }
-
-  # If the user mistakenly passed an .ini as target, ignore it and auto-build
-  if [[ -n "${TARGET:-}" && "$TARGET" =~ \.ini$ ]]; then
-    echo "Note: ignoring --target '$TARGET' (looks like a .ini). Auto-building media outputs..."
-    TARGET=""
-  fi
-
-  # If a valid non-ini target was provided, try it and return
-  if [[ -n "${TARGET:-}" ]]; then
-    if has_target "$TARGET"; then
-      echo "Building requested target: $TARGET"
-      make -j"$JOBS" "$TARGET"
-      return 0
-    else
-      echo "Requested target '$TARGET' not found in Makefile. Auto-building media outputs..."
+# Build the video and copy to source location with .ini-based name
+build_and_copy_video() {
+  local deepzoom_video="deepzoom.mov"
+  
+  # Build the video if the target exists
+  if has_target "$deepzoom_video"; then
+    echo "Building video: $deepzoom_video"
+    make -j"$JOBS" "$deepzoom_video"
+    
+    # Copy video to source directory with name based on .ini file
+    if [[ -f "$deepzoom_video" ]]; then
+      # Extract base name from config file (remove path and .ini extension)
+      local ini_basename
+      ini_basename=$(basename "$CONF" .ini)
+      local output_video="/work/${ini_basename}.mov"
+      
+      echo "Copying video to: ${output_video}"
+      cp "$deepzoom_video" "$output_video"
     fi
-  fi
-
-  # Prefer explicit video targets from the Makefile
-  local built_any=0
-  if [[ ${#video_targets[@]} -gt 0 ]]; then
-    echo "Building video targets: ${video_targets[*]}"
-    make -j"$JOBS" "${video_targets[@]}" && built_any=1
-  fi
-
-  # Build common named fallbacks if present
-  for t in "${named_fallbacks[@]}"; do
-    if has_target "$t"; then
-      echo "Building fallback target: $t"
-      make -j"$JOBS" "$t" && built_any=1
-    fi
-  done
-
-  # Also produce a representative still image if defined
-  if [[ ${#image_targets[@]} -gt 0 ]]; then
-    echo "Building image targets: ${image_targets[*]}"
-    make -j"$JOBS" "${image_targets[@]}" && built_any=1
-  fi
-
-  if [[ "$built_any" -eq 0 ]]; then
-    echo "No media targets detected. Default 'make' outputs already built."
+  else
+    # Try fallback targets
+    for fallback in video render final; do
+      if has_target "$fallback"; then
+        echo "Building fallback video target: $fallback"
+        make -j"$JOBS" "$fallback"
+        
+        # If deepzoom.mov was created, copy it
+        if [[ -f "$deepzoom_video" ]]; then
+          local ini_basename
+          ini_basename=$(basename "$CONF" .ini)
+          local output_video="/work/${ini_basename}.mov"
+          
+          echo "Copying video to: ${output_video}"
+          cp "$deepzoom_video" "$output_video"
+        fi
+        return 0
+      fi
+    done
   fi
 }
 
-auto_build_media
+# Main execution logic
+if [[ -n "${TARGET:-}" ]]; then
+  # Specific target requested - build ONLY that target (skip the full build)
+  if has_target "$TARGET"; then
+    echo "Building only requested target: $TARGET"
+    make -j"$JOBS" "$TARGET"
+    
+    # If they built a specific image, copy it to the source directory too
+    if [[ "$TARGET" =~ \.(jpg|jpeg|png)$ && -f "$TARGET" ]]; then
+      echo "Copying $TARGET to /work/"
+      cp "$TARGET" "/work/"
+    fi
+  else
+    echo "Error: Target '$TARGET' not found in Makefile."
+    echo "Available keyframe targets:"
+    make -n -p 2>/dev/null | grep -E '^keyframe_[0-9]+\.(map|jpg):' | cut -d: -f1 | sort -V | head -20
+    exit 1
+  fi
+else
+  # No specific target - build everything and auto-detect media outputs
+  echo "Building all keyframes..."
+  make -j"$JOBS"
+  
+  auto_build_media() {
+    local mk="Makefile"
+    [[ -f $mk ]] || return 0
+    
+    # Gather video and image targets declared in Makefile
+    mapfile -t video_targets < <(awk -F: '/^[A-Za-z0-9_\.\/\-]+:/{print $1}' "$mk" | \
+      grep -Ei '\\.(mp4|mov|webm|mkv|avi|mpg|m4v)$' || true)
+    mapfile -t image_targets < <(awk -F: '/^[A-Za-z0-9_\.\/\-]+:/{print $1}' "$mk" | \
+      grep -Ei '\\.(jpg|jpeg|png)$' || true)
+    
+    local built_any=0
+    
+    # Build video and copy to source location
+    build_and_copy_video && built_any=1
+    
+    # Also produce representative still images if defined
+    if [[ ${#image_targets[@]} -gt 0 ]]; then
+      echo "Building image targets: ${image_targets[*]}"
+      make -j"$JOBS" "${image_targets[@]}" && built_any=1
+    fi
+    
+    if [[ "$built_any" -eq 0 ]]; then
+      echo "No additional media targets to build."
+    fi
+  }
+  
+  auto_build_media
+fi
