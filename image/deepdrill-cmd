@@ -40,6 +40,10 @@ fi
 
 mkdir -p "$OUT"
 
+# Disable SDL joystick and gamecontroller probing to suppress noisy /dev/input/js0 warnings
+export SDL_JOYSTICK_IGNORE_DEVICES=all
+export SDL_GAMECONTROLLER_IGNORE_DEVICES=all
+
 # Run deepmake non-interactively; always auto-confirm
 if [[ ${DEEPDRILL_ASSUME_YES:-$ASSUME_YES} -eq 1 ]]; then
   # Send a single 'y' to confirm; avoids SIGPIPE with 'yes' under pipefail
