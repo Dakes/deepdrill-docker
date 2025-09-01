@@ -3,7 +3,7 @@ FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive \
     DISPLAY=:1 \
     LIBGL_ALWAYS_SOFTWARE=1 \
-    MESA_GLSL_CACHE_DIR=/tmp/.mesa-cache
+    MESA_SHADER_CACHE_DIR=/tmp/.mesa-cache
 
 # Allow pinning DeepDrill
 ARG DEEPDRILL_REPO=https://github.com/dirkwhoffmann/DeepDrill.git
