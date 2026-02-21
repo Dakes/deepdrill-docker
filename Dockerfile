@@ -36,7 +36,8 @@ RUN git clone --depth=1 "$DEEPDRILL_REPO" DeepDrill && \
 
 WORKDIR /opt/DeepDrill
 RUN cmake -S src -B build -DCMAKE_BUILD_TYPE=Release && \
-    cmake --build build -j"$(nproc)"
+    cmake --build build -j"$(nproc)" && \
+    sed -i '/coord.y = 1.0 - coord.y;/d' shaders/illuminators/normalmap.glsl
 
 # Lightweight wrapper for easy invocation inside container
 COPY image/deepdrill-cmd /usr/local/bin/deepdrill-cmd
